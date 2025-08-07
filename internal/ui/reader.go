@@ -28,6 +28,7 @@ type ReaderModel struct {
 	showTOC         bool
 	ready           bool
 	config          *config.Config
+	tocModel        *TOCModel
 	
 	// Page-based navigation
 	content              []string  // All content lines
@@ -71,6 +72,7 @@ func NewReaderModel(fictionID string) *ReaderModel {
 		linesPerPage:  linesPerPage,
 		currentPage:   0,
 		content:       []string{},
+		tocModel:      nil, // Will be initialized when fiction loads
 	}
 }
 
@@ -126,6 +128,22 @@ func (m *ReaderModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		// Handle TOC navigation first if TOC is visible
+		if m.showTOC && m.tocModel != nil {
+			if selectedChapter, shouldClose := m.tocModel.Update(msg); shouldClose {
+				m.showTOC = false
+				m.tocModel.SetVisible(false)
+				if selectedChapter >= 0 {
+					// Jump to selected chapter
+					m.chapterIndex = selectedChapter
+					m.loading = true
+					return m, m.loadChapter(selectedChapter)
+				}
+				return m, nil
+			}
+			return m, nil
+		}
+		
 		switch msg.String() {
 		case "ctrl+c", "q":
 			// Save progress before quitting
@@ -140,8 +158,9 @@ func (m *ReaderModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showHelp = !m.showHelp
 			return m, nil
 		case "t":
-			if m.fiction != nil {
+			if m.fiction != nil && m.tocModel != nil {
 				m.showTOC = !m.showTOC
+				m.tocModel.SetVisible(m.showTOC)
 			}
 			return m, nil
 		case "n", "b":
@@ -198,22 +217,15 @@ func (m *ReaderModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loading = true
 			m.err = nil
 			return m, m.loadFiction()
-		case "0", "1", "2", "3", "4", "5", "6", "7", "8", "9":
-			if m.showTOC && m.fiction != nil {
-				if chapterNum, err := strconv.Atoi(msg.String()); err == nil {
-					if chapterNum >= 1 && chapterNum <= len(m.fiction.Chapters) {
-						m.chapterIndex = chapterNum - 1
-						m.loading = true
-						m.showTOC = false
-						return m, m.loadChapter(m.chapterIndex)
-					}
-				}
-			}
 		}
 
 	case fictionLoadedMsg:
 		m.loading = false
 		m.fiction = msg
+		
+		// Initialize TOC model now that we have fiction data
+		m.tocModel = NewTOCModel(m.fiction, 0, m.termHeight)
+		
 		if len(m.fiction.Chapters) > 0 {
 			// Start from specified chapter or first chapter
 			startIndex := m.startChapter
@@ -233,6 +245,12 @@ func (m *ReaderModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.currentChapter = msg.chapter
 		m.chapterIndex = msg.index
+		
+		// Update TOC model with new current chapter
+		if m.tocModel != nil {
+			m.tocModel.SetCurrentChapter(msg.index)
+		}
+		
 		m.updateContent()
 		
 		// Set page position
@@ -335,8 +353,8 @@ func (m *ReaderModel) contentView() string {
 		return m.helpContent()
 	}
 	
-	if m.showTOC && m.fiction != nil {
-		return m.tocContent()
+	if m.showTOC && m.tocModel != nil {
+		return m.tocModel.View()
 	}
 	
 	return m.getCurrentPageContent()
@@ -374,14 +392,17 @@ func (m *ReaderModel) getCurrentPageContent() string {
 }
 
 func (m *ReaderModel) footerView() string {
-	info := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	info := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Background(lipgloss.Color("235")).
+		Padding(0, 1)
 	
 	if m.showHelp {
-		return info.Render("Keys: →/← turn pages • n/b next/prev chapter • m menu • q quit")
+		return info.Render("Keys: →/← turn pages • n/b next/prev chapter • t TOC • m menu • q quit")
 	}
 	
-	if m.showTOC {
-		return info.Render("TOC mode: Press chapter number (1-9) to jump • t to exit TOC mode")
+	if m.showTOC && m.tocModel != nil {
+		return m.tocModel.FooterView()
 	}
 	
 	// Show page progress
@@ -412,7 +433,7 @@ func (m *ReaderModel) footerView() string {
 		return info.Render(progress)
 	}
 	
-	return info.Render("Press ? for help")
+	return info.Render("Press ? for help • t for TOC")
 }
 
 func (m *ReaderModel) updateContent() {
@@ -455,14 +476,18 @@ CHAPTER NAVIGATION:
   G / end        Last page of chapter
   
 FEATURES:
-  t              Toggle table of contents
+  t              Toggle table of contents (scrollable)
   ?              Toggle this help
   m              Back to main menu
   r              Refresh current content
   q              Quit
   
 TABLE OF CONTENTS:
-  When TOC is open, press a number (1-9) to jump to that chapter.
+  When TOC is open:
+  • ↑/↓ or j/k to navigate chapters
+  • Enter to jump to selected chapter
+  • Numbers 1-9 for quick chapter jumps
+  • t or Escape to close TOC
   
 READING:
   Navigate like reading a book! Use left/right arrows or space to turn pages.
@@ -473,40 +498,6 @@ Press ? again to close this help.`
 	return help
 }
 
-func (m *ReaderModel) tocContent() string {
-	if m.fiction == nil || len(m.fiction.Chapters) == 0 {
-		return "No chapters available"
-	}
-
-	var toc strings.Builder
-	toc.WriteString("📑 Table of Contents\n\n")
-	
-	for i, chapter := range m.fiction.Chapters {
-		prefix := "  "
-		if i == m.chapterIndex {
-			prefix = "▶ "
-		}
-		
-		number := fmt.Sprintf("%2d", i+1)
-		if i < 9 {
-			number = fmt.Sprintf(" %d", i+1)
-		}
-		
-		line := fmt.Sprintf("%s%s. %s", prefix, number, chapter.Title)
-		if i == m.chapterIndex {
-			line = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("170")).
-				Bold(true).
-				Render(line)
-		}
-		
-		toc.WriteString(line + "\n")
-	}
-	
-	toc.WriteString("\nPress a number (1-9) to jump to chapter, or 't' to exit TOC mode.")
-	
-	return toc.String()
-}
 
 func (m *ReaderModel) formatChapterContent() string {
 	if m.currentChapter == nil {
