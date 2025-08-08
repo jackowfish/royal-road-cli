@@ -118,6 +118,10 @@ func (m *MenuModel) handleMainMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Browse popular
 		browseModel := NewBrowseModel()
 		return browseModel, browseModel.Init()
+	case "s":
+		// Search fictions
+		searchModel := NewSearchModel()
+		return searchModel, searchModel.Init()
 	}
 	return m, nil
 }
@@ -252,6 +256,7 @@ func (m *MenuModel) viewMainMenu() string {
 	options.WriteString("  [h] Reading History\n")
 	options.WriteString("  [n] Start New Book\n") 
 	options.WriteString("  [b] Browse Popular Fictions\n")
+	options.WriteString("  [s] Search Fictions\n")
 	options.WriteString("  [q] Quit\n")
 	
 	return fmt.Sprintf("%s\n\n%s", title, options.String())

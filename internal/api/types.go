@@ -72,3 +72,23 @@ type PopularFiction struct {
 		Score     float64 `json:"score"`
 	} `json:"stats"`
 }
+
+type SearchFiction struct {
+	ID          int               `json:"id"`
+	Title       string            `json:"title"`
+	Image       string            `json:"image"`
+	Author      string            `json:"author"`
+	Tags        []string          `json:"tags"`
+	Type        string            `json:"type"`
+	Status      string            `json:"status"`
+	Description string            `json:"description"`
+	Stats       SearchFictionStats `json:"stats"`
+}
+
+type SearchFictionStats struct {
+	Followers int     `json:"followers"`
+	Rating    float64 `json:"rating"`
+	Pages     int     `json:"pages"`
+	Views     int     `json:"views"`
+	Chapters  int     `json:"chapters"`
+}

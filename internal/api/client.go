@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -78,6 +79,16 @@ func (c *Client) GetPopularFictions() ([]PopularFiction, error) {
 	}
 
 	return c.parsePopularFictions(doc)
+}
+
+func (c *Client) SearchFictions(title string) ([]SearchFiction, error) {
+	path := fmt.Sprintf("/fictions/search?title=%s&globalFilters=true", url.QueryEscape(title))
+	doc, err := c.get(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search fictions: %w", err)
+	}
+
+	return c.parseSearchResults(doc)
 }
 
 func (c *Client) parseFiction(doc *goquery.Document, id int) (*Fiction, error) {
@@ -261,6 +272,99 @@ func (c *Client) parsePopularFictions(doc *goquery.Document) ([]PopularFiction, 
 	})
 
 	return fictions, nil
+}
+
+func (c *Client) parseSearchResults(doc *goquery.Document) ([]SearchFiction, error) {
+	var fictions []SearchFiction
+
+	doc.Find("div.fiction-list-item").Each(func(i int, s *goquery.Selection) {
+		fiction := SearchFiction{}
+
+		titleLink := s.Find("h2.fiction-title a")
+		fiction.Title = strings.TrimSpace(titleLink.Text())
+		
+		if href, exists := titleLink.Attr("href"); exists {
+			parts := strings.Split(href, "/")
+			if len(parts) > 2 {
+				if id, err := strconv.Atoi(parts[2]); err == nil {
+					fiction.ID = id
+				}
+			}
+		}
+
+		if img, exists := s.Find("img").Attr("src"); exists {
+			fiction.Image = img
+		}
+
+		fiction.Author = strings.TrimSpace(s.Find(".author").Text())
+
+		labels := s.Find("span.bg-blue-hoki")
+		if labels.Length() >= 1 {
+			fiction.Type = strings.TrimSpace(labels.Eq(0).Text())
+		}
+		if labels.Length() >= 2 {
+			fiction.Status = strings.TrimSpace(labels.Eq(1).Text())
+		}
+
+		s.Find(".tags .fiction-tag").Each(func(j int, tag *goquery.Selection) {
+			fiction.Tags = append(fiction.Tags, strings.TrimSpace(tag.Text()))
+		})
+
+		descDiv := s.Find("div.description")
+		if descDiv.Length() > 0 {
+			fiction.Description = strings.TrimSpace(descDiv.Text())
+		}
+
+		c.parseSearchStats(s, &fiction.Stats)
+
+		fictions = append(fictions, fiction)
+	})
+
+	return fictions, nil
+}
+
+func (c *Client) parseSearchStats(s *goquery.Selection, stats *SearchFictionStats) {
+	parseNumber := func(raw string) int {
+		cleaned := regexp.MustCompile(`[,\s]`).ReplaceAllString(raw, "")
+		cleaned = regexp.MustCompile(`[^\d]`).ReplaceAllString(cleaned, "")
+		if num, err := strconv.Atoi(cleaned); err == nil {
+			return num
+		}
+		return 0
+	}
+
+	parseRating := func(raw string) float64 {
+		if rating, err := strconv.ParseFloat(strings.TrimSpace(raw), 64); err == nil {
+			return rating
+		}
+		return 0
+	}
+
+	statsDiv := s.Find("div.stats")
+	
+	statsDiv.Find("div.col-sm-6").Each(func(j int, div *goquery.Selection) {
+		span := div.Find("span")
+		if span.Length() > 0 {
+			text := strings.TrimSpace(span.Text())
+			
+			if strings.Contains(text, "Followers") {
+				stats.Followers = parseNumber(text)
+			} else if strings.Contains(text, "Pages") {
+				stats.Pages = parseNumber(text)
+			} else if strings.Contains(text, "Views") {
+				stats.Views = parseNumber(text)
+			} else if strings.Contains(text, "Chapters") {
+				stats.Chapters = parseNumber(text)
+			}
+		}
+
+		ratingSpan := div.Find("span[title]")
+		if ratingSpan.Length() > 0 {
+			if title, exists := ratingSpan.Attr("title"); exists {
+				stats.Rating = parseRating(title)
+			}
+		}
+	})
 }
 
 func (c *Client) extractChapterID(url string) int {

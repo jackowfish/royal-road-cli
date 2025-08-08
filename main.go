@@ -80,10 +80,22 @@ var continueCmd = &cobra.Command{
 	},
 }
 
+var searchCmd = &cobra.Command{
+	Use:   "search",
+	Short: "Search for fictions by title",
+	Run: func(cmd *cobra.Command, args []string) {
+		p := tea.NewProgram(ui.NewSearchModel(), tea.WithAltScreen())
+		if _, err := p.Run(); err != nil {
+			log.Fatal(err)
+		}
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(readCmd)
 	rootCmd.AddCommand(browseCmd)
 	rootCmd.AddCommand(continueCmd)
+	rootCmd.AddCommand(searchCmd)
 }
 
 func main() {

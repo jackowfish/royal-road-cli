@@ -18,6 +18,9 @@ royal-road-cli
 # Browse popular fictions
 royal-road-cli browse
 
+# Search for fictions by title
+royal-road-cli search
+
 # Read by fiction ID
 royal-road-cli read [fiction-id]
 
@@ -43,11 +46,19 @@ royal-road-cli continue
 - `r` - Refresh list
 - `q` - Quit
 
+### Search
+- Type search terms and press `Enter`
+- `↑/↓` - Navigate results
+- `Enter` - Select fiction to read
+- `Esc` - Go back to search input
+- `q` - Return to main menu
+
 ### Menu
 - `c` - Continue reading
 - `h` - History
 - `n` - New book
 - `b` - Browse
+- `s` - Search
 - `q` - Quit
 
 ## Requirements
