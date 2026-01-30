@@ -7,17 +7,19 @@ import (
 )
 
 type Config struct {
-	Theme           Theme           `json:"theme"`
+	ThemeName       string          `json:"themeName"`       // Selected theme: "purple", "blue", "green", "mono"
+	FirstLaunch     bool            `json:"firstLaunch"`     // Whether this is the first launch
+	Theme           ThemeSettings   `json:"theme"`           // Legacy theme settings
 	Reading         Reading         `json:"reading"`
 	LastFiction     string          `json:"lastFiction"`
 	Bookmarks       []Bookmark      `json:"bookmarks"`
 	ReadingHistory  []ReadingEntry  `json:"readingHistory"`
 }
 
-type Theme struct {
-	AccentColor   string `json:"accentColor"`
+type ThemeSettings struct {
+	AccentColor     string `json:"accentColor"`
 	BackgroundColor string `json:"backgroundColor"`
-	TextColor     string `json:"textColor"`
+	TextColor       string `json:"textColor"`
 }
 
 type Reading struct {
@@ -48,7 +50,9 @@ type ReadingEntry struct {
 
 func DefaultConfig() *Config {
 	return &Config{
-		Theme: Theme{
+		ThemeName:   "",    // Empty means first launch, will show theme selector
+		FirstLaunch: true,  // First launch flag
+		Theme: ThemeSettings{
 			AccentColor:     "170",
 			BackgroundColor: "0",
 			TextColor:       "15",
@@ -62,6 +66,17 @@ func DefaultConfig() *Config {
 		Bookmarks:      []Bookmark{},
 		ReadingHistory: []ReadingEntry{},
 	}
+}
+
+// SetTheme sets the selected theme name and marks first launch as complete
+func (c *Config) SetTheme(themeName string) {
+	c.ThemeName = themeName
+	c.FirstLaunch = false
+}
+
+// NeedsThemeSelection returns true if user needs to select a theme
+func (c *Config) NeedsThemeSelection() bool {
+	return c.FirstLaunch || c.ThemeName == ""
 }
 
 func Load() (*Config, error) {

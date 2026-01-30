@@ -24,13 +24,13 @@ func (f FictionListItem) Description() string {
 	if author == "" {
 		author = "Unknown Author"
 	}
-	
+
 	tags := ""
 	if len(f.fiction.Tags) > 0 {
 		tags = " • " + strings.Join(f.fiction.Tags[:min(3, len(f.fiction.Tags))], ", ")
 	}
-	
-	return fmt.Sprintf("%s%s", author, tags)
+
+	return fmt.Sprintf("by %s%s", author, tags)
 }
 
 func (f FictionListItem) FilterValue() string {
@@ -38,10 +38,12 @@ func (f FictionListItem) FilterValue() string {
 }
 
 type BrowseModel struct {
-	list      list.Model
-	client    *api.Client
-	loading   bool
-	err       error
+	list    list.Model
+	client  *api.Client
+	loading bool
+	err     error
+	width   int
+	height  int
 }
 
 type fictionsLoadedMsg []api.PopularFiction
@@ -49,37 +51,30 @@ type errorMsg error
 
 func NewBrowseModel() *BrowseModel {
 	items := []list.Item{}
-	
-	// Get terminal size for proper initialization
-	termWidth, termHeight := getTerminalSize()
-	
-	delegate := list.NewDefaultDelegate()
-	delegate.SetHeight(3)
-	delegate.Styles.SelectedTitle = lipgloss.NewStyle().
-		BorderLeft(true).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("170")).
-		Foreground(lipgloss.Color("170")).
-		Bold(true).
-		Padding(0, 0, 0, 1)
-	
-	delegate.Styles.SelectedDesc = lipgloss.NewStyle().
-		BorderLeft(true).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("170")).
-		Foreground(lipgloss.Color("240")).
-		Padding(0, 0, 0, 1)
 
-	l := list.New(items, delegate, termWidth, termHeight-2)
-	l.Title = "📚 Popular Royal Road Fictions"
-	l.StatusMessageLifetime = 0
-	l.SetShowHelp(true)
+	termWidth, termHeight := getTerminalSize()
+
+	delegate := NewFictionDelegate()
+
+	l := list.New(items, delegate, termWidth, termHeight-4)
+	l.Title = ""
+	l.SetShowTitle(false)
+	l.SetShowHelp(false)
+	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(true)
+	l.DisableQuitKeybindings()
+
+	// Style the filter input
+	l.FilterInput.PromptStyle = lipgloss.NewStyle().Foreground(CurrentTheme.Primary)
+	l.FilterInput.TextStyle = lipgloss.NewStyle().Foreground(CurrentTheme.Text)
+	l.FilterInput.Cursor.Style = lipgloss.NewStyle().Foreground(CurrentTheme.Primary)
 
 	return &BrowseModel{
 		list:    l,
 		client:  api.NewClient(),
 		loading: true,
+		width:   termWidth,
+		height:  termHeight,
 	}
 }
 
@@ -90,14 +85,25 @@ func (m *BrowseModel) Init() tea.Cmd {
 func (m *BrowseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
 		m.list.SetWidth(msg.Width)
-		m.list.SetHeight(msg.Height - 2) // Leave space for status line
+		m.list.SetHeight(msg.Height - 4)
 		return m, nil
-	
+
 	case tea.KeyMsg:
+		// Don't handle keys if filtering
+		if m.list.FilterState() == list.Filtering {
+			break
+		}
+
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
+		case "esc":
+			// Go back to menu
+			menuModel := NewMenuModel()
+			return menuModel, menuModel.Init()
 		case "enter":
 			if item, ok := m.list.SelectedItem().(FictionListItem); ok {
 				readerModel := NewReaderModel(fmt.Sprintf("%d", item.fiction.ID))
@@ -108,7 +114,7 @@ func (m *BrowseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = nil
 			return m, m.loadFictions()
 		}
-	
+
 	case fictionsLoadedMsg:
 		m.loading = false
 		items := make([]list.Item, len(msg))
@@ -117,7 +123,7 @@ func (m *BrowseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.list.SetItems(items)
 		return m, nil
-	
+
 	case errorMsg:
 		m.loading = false
 		m.err = msg
@@ -130,20 +136,43 @@ func (m *BrowseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *BrowseModel) View() string {
+	s := NewStyles()
+
+	// Header
+	header := Header("Royal Road CLI", "Browse Popular", m.width)
+
+	// Content
+	var content string
+
 	if m.loading {
-		return lipgloss.NewStyle().
+		content = lipgloss.NewStyle().
 			Padding(2).
-			Render("🔄 Loading popular fictions...")
-	}
-	
-	if m.err != nil {
-		return lipgloss.NewStyle().
+			Render(LoadingMessage("Loading popular fictions...", 0))
+	} else if m.err != nil {
+		content = lipgloss.NewStyle().
 			Padding(2).
-			Foreground(lipgloss.Color("196")).
-			Render(fmt.Sprintf("❌ Error loading fictions: %v\n\nPress 'r' to retry or 'q' to quit.", m.err))
+			Render(ErrorMessage(m.err) + "\n\n" + s.TextMuted.Render("Press 'r' to retry"))
+	} else {
+		content = m.list.View()
 	}
-	
-	return m.list.View()
+
+	// Footer
+	bindings := []KeyBinding{
+		{Key: "↑↓", Desc: "navigate"},
+		{Key: "/", Desc: "filter"},
+		{Key: "enter", Desc: "read"},
+		{Key: "r", Desc: "refresh"},
+		{Key: "esc", Desc: "back"},
+	}
+	footer := Footer(bindings, m.width)
+
+	// Calculate content height
+	contentHeight := m.height - 4
+	contentArea := lipgloss.NewStyle().
+		Height(contentHeight).
+		Render(content)
+
+	return header + "\n" + contentArea + "\n" + footer
 }
 
 func (m *BrowseModel) loadFictions() tea.Cmd {
@@ -155,4 +184,3 @@ func (m *BrowseModel) loadFictions() tea.Cmd {
 		return fictionsLoadedMsg(fictions)
 	})
 }
-

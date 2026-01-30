@@ -35,10 +35,23 @@ func (c *Client) get(path string) (*goquery.Document, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		msg := "unexpected error"
+		switch resp.StatusCode {
+		case http.StatusNotFound:
+			msg = "not found"
+		case http.StatusForbidden:
+			msg = "access forbidden"
+		case http.StatusInternalServerError:
+			msg = "server error"
+		case http.StatusBadGateway, http.StatusServiceUnavailable:
+			msg = "service unavailable"
+		case http.StatusTooManyRequests:
+			msg = "rate limited, please try again later"
+		}
+		return nil, fmt.Errorf("%s (status %d)", msg, resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -156,10 +169,14 @@ func (c *Client) parseStats(doc *goquery.Document, stats *FictionStats) {
 	}
 
 	statsEl := doc.Find("div.stats-content")
-	statsList := statsEl.Find(".list-unstyled").Eq(1).Find("li")
-	ratingList := statsEl.Find(".list-unstyled").Eq(0).Find("li")
+	listUnstyled := statsEl.Find(".list-unstyled")
+	var statsList, ratingList *goquery.Selection
+	if listUnstyled.Length() >= 2 {
+		statsList = listUnstyled.Eq(1).Find("li")
+		ratingList = listUnstyled.Eq(0).Find("li")
+	}
 
-	if statsList.Length() >= 12 {
+	if statsList != nil && statsList.Length() >= 12 {
 		stats.Pages = parseNumber(statsList.Eq(11).Text())
 		stats.Ratings = parseNumber(statsList.Eq(9).Text())
 		stats.Followers = parseNumber(statsList.Eq(5).Text())
@@ -168,7 +185,7 @@ func (c *Client) parseStats(doc *goquery.Document, stats *FictionStats) {
 		stats.Views.Average = parseNumber(statsList.Eq(3).Text())
 	}
 
-	if ratingList.Length() >= 10 {
+	if ratingList != nil && ratingList.Length() >= 10 {
 		getContent := func(sel *goquery.Selection) string {
 			if content, exists := sel.Find("span").Attr("data-content"); exists {
 				return content
@@ -379,7 +396,7 @@ func (c *Client) extractChapterID(url string) int {
 
 func parseRelativeTime(timeText string) (time.Time, error) {
 	now := time.Now()
-	
+
 	if strings.Contains(timeText, "ago") {
 		if strings.Contains(timeText, "hour") {
 			re := regexp.MustCompile(`(\d+)\s*hour`)
@@ -405,5 +422,5 @@ func parseRelativeTime(timeText string) (time.Time, error) {
 		}
 	}
 
-	return now, nil
+	return time.Time{}, fmt.Errorf("unable to parse time: %s", timeText)
 }

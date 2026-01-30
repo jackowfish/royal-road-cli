@@ -12,7 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-type searchModel struct {
+type SearchModel struct {
 	input       textinput.Model
 	list        list.Model
 	searching   bool
@@ -20,64 +20,65 @@ type searchModel struct {
 	client      *api.Client
 	fictions    []api.SearchFiction
 	showResults bool
+	width       int
+	height      int
 }
 
 type searchResultsMsg []api.SearchFiction
 type searchErrorMsg error
 
-func NewSearchModel() searchModel {
+func NewSearchModel() SearchModel {
+	termWidth, termHeight := getTerminalSize()
+
 	input := textinput.New()
 	input.Placeholder = "Enter search terms..."
+	input.Prompt = ""
 	input.Focus()
+	input.Width = min(60, termWidth-8) - 6 // Account for border + padding
 
-	items := []list.Item{}
-	
-	termWidth, termHeight := getTerminalSize()
-	
-	delegate := list.NewDefaultDelegate()
-	delegate.SetHeight(3)
-	delegate.Styles.SelectedTitle = lipgloss.NewStyle().
-		BorderLeft(true).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("170")).
-		Foreground(lipgloss.Color("170")).
-		Bold(true).
-		Padding(0, 0, 0, 1)
-	
-	delegate.Styles.SelectedDesc = lipgloss.NewStyle().
-		BorderLeft(true).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("170")).
-		Foreground(lipgloss.Color("240")).
-		Padding(0, 0, 0, 1)
+	delegate := NewFictionDelegate()
 
-	l := list.New(items, delegate, termWidth, termHeight-2)
-	l.Title = "🔍 Search Results"
-	l.StatusMessageLifetime = 0
-	l.SetShowHelp(true)
-	l.SetShowStatusBar(true)
+	l := list.New([]list.Item{}, delegate, termWidth, termHeight-4)
+	l.Title = ""
+	l.SetShowTitle(false)
+	l.SetShowHelp(false)
+	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(false)
+	l.DisableQuitKeybindings()
 
-	return searchModel{
+	return SearchModel{
 		input:  input,
 		list:   l,
 		client: api.NewClient(),
+		width:  termWidth,
+		height: termHeight,
 	}
 }
 
-func (m searchModel) Init() tea.Cmd {
+func (m SearchModel) Init() tea.Cmd {
 	return textinput.Blink
 }
 
-func (m searchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m SearchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.list.SetWidth(msg.Width)
+		m.list.SetHeight(msg.Height - 4)
+		m.input.Width = min(60, msg.Width-8) - 6
+		return m, nil
+
 	case tea.KeyMsg:
 		if m.showResults {
 			switch msg.String() {
-			case "esc", "q":
+			case "ctrl+c", "q":
+				return m, tea.Quit
+			case "esc":
 				m.showResults = false
+				m.input.Focus()
 				return m, nil
 			case "enter":
 				if selected, ok := m.list.SelectedItem().(searchFictionItem); ok {
@@ -89,7 +90,9 @@ func (m searchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		} else {
 			switch msg.String() {
-			case "esc", "q":
+			case "ctrl+c", "q":
+				return m, tea.Quit
+			case "esc":
 				return NewMenuModel(), nil
 			case "enter":
 				if strings.TrimSpace(m.input.Value()) != "" {
@@ -114,10 +117,6 @@ func (m searchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.searching = false
 		m.err = error(msg)
 		return m, nil
-
-	case tea.WindowSizeMsg:
-		m.list.SetWidth(msg.Width)
-		m.list.SetHeight(msg.Height - 2)
 	}
 
 	if !m.showResults {
@@ -126,35 +125,80 @@ func (m searchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m searchModel) View() string {
+func (m SearchModel) View() string {
+	s := NewStyles()
+
+	// Determine context
+	context := "Search"
 	if m.showResults {
-		return m.list.View()
+		context = fmt.Sprintf("Results for \"%s\"", m.input.Value())
 	}
 
-	var s strings.Builder
+	// Header
+	header := Header("Royal Road CLI", context, m.width)
 
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("205")).
-		PaddingBottom(1)
+	var content strings.Builder
 
-	s.WriteString(titleStyle.Render("🔍 Search Royal Road Fictions"))
-	s.WriteString("\n\n")
-	s.WriteString(m.input.View())
-	s.WriteString("\n\n")
-
-	if m.searching {
-		s.WriteString("Searching...")
-	} else if m.err != nil {
-		s.WriteString(fmt.Sprintf("Error: %v", m.err))
+	if m.showResults {
+		// Show results list
+		content.WriteString(m.list.View())
 	} else {
-		s.WriteString("Press Enter to search, Esc to go back")
+		// Show search input
+		content.WriteString("\n")
+		content.WriteString(s.Title.Render("  Search Royal Road"))
+		content.WriteString("\n\n")
+
+		content.WriteString(s.Text.Render("  Enter your search query:"))
+		content.WriteString("\n\n")
+
+		// Styled input with fixed width to prevent border misalignment
+		inputWidth := min(60, m.width-8)
+		inputContent := lipgloss.Place(inputWidth-4, 1, lipgloss.Left, lipgloss.Center, m.input.View())
+		inputStyle := lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(CurrentTheme.Primary).
+			Padding(0, 1).
+			Width(inputWidth).
+			MarginLeft(2)
+
+		content.WriteString(inputStyle.Render(inputContent))
+		content.WriteString("\n\n")
+
+		if m.searching {
+			content.WriteString("  " + LoadingMessage("Searching...", 0))
+		} else if m.err != nil {
+			content.WriteString("  " + ErrorMessage(m.err))
+		} else {
+			content.WriteString(s.TextMuted.Render("  Press Enter to search"))
+		}
 	}
 
-	return s.String()
+	// Footer
+	var bindings []KeyBinding
+	if m.showResults {
+		bindings = []KeyBinding{
+			{Key: "↑↓", Desc: "navigate"},
+			{Key: "enter", Desc: "read"},
+			{Key: "esc", Desc: "new search"},
+		}
+	} else {
+		bindings = []KeyBinding{
+			{Key: "enter", Desc: "search"},
+			{Key: "esc", Desc: "back to menu"},
+		}
+	}
+	footer := Footer(bindings, m.width)
+
+	// Calculate content height
+	contentHeight := m.height - 4
+	contentArea := lipgloss.NewStyle().
+		Height(contentHeight).
+		Render(content.String())
+
+	return header + "\n" + contentArea + "\n" + footer
 }
 
-func (m searchModel) search() tea.Cmd {
+func (m SearchModel) search() tea.Cmd {
 	query := strings.TrimSpace(m.input.Value())
 	return func() tea.Msg {
 		fictions, err := m.client.SearchFictions(query)
